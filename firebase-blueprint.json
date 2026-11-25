@@ -1,0 +1,472 @@
+{
+  "entities": {
+    "AdminMarker": {
+      "title": "AdminMarker",
+      "description": "Marker document granting platform administration privileges to a verified UID.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "maxLength": 150 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "createdAt"]
+    },
+    "UserRole": {
+      "title": "UserRole",
+      "description": "Authoritative user role assignment (admin or user) keyed by Firebase UID.",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "minLength": 3, "maxLength": 150 },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user_id", "email", "role", "createdAt", "updatedAt"]
+    },
+    "User": {
+      "title": "User",
+      "description": "Authenticated LOKMA user account (PII restricted to owner and admin).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "full_name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "email": { "type": "string", "minLength": 3, "maxLength": 150 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "role": { "type": "string", "enum": ["student", "provider", "delivery_partner", "admin"] },
+        "status": { "type": "string", "enum": ["active", "pending", "suspended"] },
+        "auth_method": { "type": "string", "enum": ["email", "phone", "google"] },
+        "email_verified": { "type": "boolean" },
+        "phone_verified": { "type": "boolean" },
+        "terms_accepted_at": { "type": "string", "format": "date-time" },
+        "last_login_at": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "full_name", "email", "phone", "role", "status", "createdAt", "updatedAt"]
+    },
+    "PhoneAccount": {
+      "title": "PhoneAccount",
+      "description": "Non-PII SHA-256 phone number registry preventing duplicate phone signups across accounts.",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "auth_method": { "type": "string", "enum": ["email", "phone", "google"] },
+        "phone_verified": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user_id", "auth_method", "phone_verified", "createdAt", "updatedAt"]
+    },
+    "StudentProfile": {
+      "title": "StudentProfile",
+      "description": "Student budget, delivery address, and dietary preferences (PII restricted to owner and admin).",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "university_id": { "type": "string", "maxLength": 128 },
+        "university_name": { "type": "string", "maxLength": 150 },
+        "faculty": { "type": "string", "maxLength": 150 },
+        "academic_year": { "type": "integer" },
+        "daily_budget": { "type": "number" },
+        "weekly_budget": { "type": "number" },
+        "delivery_location": { "type": "string", "maxLength": 300 },
+        "allergen_ids": { "type": "array" },
+        "dietary_pref_ids": { "type": "array" },
+        "category_prefs": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user_id", "university_id", "faculty", "daily_budget", "weekly_budget", "delivery_location", "allergen_ids", "dietary_pref_ids", "category_prefs", "createdAt", "updatedAt"]
+    },
+    "ProviderProfile": {
+      "title": "ProviderProfile",
+      "description": "Homemade food provider kitchen profile.",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "university_id": { "type": "string", "maxLength": 128 },
+        "business_name": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "bio": { "type": "string", "maxLength": 600 },
+        "area": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "pickup_address": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "logo_url": { "type": "string", "maxLength": 500000 },
+        "verification_status": { "type": "string", "enum": ["pending", "verified", "rejected", "suspended"] },
+        "verified_by": { "type": "string", "maxLength": 128 },
+        "verified_at": { "type": "string", "format": "date-time" },
+        "is_accepting_orders": { "type": "boolean" },
+        "avg_rating": { "type": "number" },
+        "review_count": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user_id", "university_id", "business_name", "bio", "area", "pickup_address", "logo_url", "verification_status", "is_accepting_orders", "avg_rating", "review_count", "createdAt", "updatedAt"]
+    },
+    "DeliveryPartnerProfile": {
+      "title": "DeliveryPartnerProfile",
+      "description": "Student delivery partner verification and status profile.",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "full_name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "phone": { "type": "string", "maxLength": 30 },
+        "university_id": { "type": "string", "maxLength": 128 },
+        "national_id_last4": { "type": "string", "minLength": 4, "maxLength": 4, "pattern": "^[0-9]{4}$" },
+        "student_card_id": { "type": "string", "minLength": 2, "maxLength": 50 },
+        "delivery_method": { "type": "string", "enum": ["walking", "bicycle"] },
+        "verification_status": { "type": "string", "enum": ["pending", "verified", "rejected", "suspended"] },
+        "verified_by": { "type": "string", "maxLength": 128 },
+        "verified_at": { "type": "string", "format": "date-time" },
+        "is_online": { "type": "boolean" },
+        "availability_schedule": { "type": "string", "maxLength": 150 },
+        "completed_deliveries": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user_id", "full_name", "university_id", "national_id_last4", "student_card_id", "delivery_method", "verification_status", "is_online", "availability_schedule", "completed_deliveries", "createdAt", "updatedAt"]
+    },
+    "Meal": {
+      "title": "Meal",
+      "description": "Homemade meal created by a food provider.",
+      "type": "object",
+      "properties": {
+        "provider_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "provider_name": { "type": "string", "maxLength": 150 },
+        "category_id": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "name_ar": { "type": "string", "maxLength": 150 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "price": { "type": "number" },
+        "portion_description": { "type": "string", "maxLength": 150 },
+        "image_url": { "type": "string", "maxLength": 600000 },
+        "prep_time_minutes": { "type": "integer" },
+        "is_available": { "type": "boolean" },
+        "deleted_at": { "type": "string", "format": "date-time" },
+        "calories_kcal": { "type": "number" },
+        "protein_g": { "type": "number" },
+        "carbs_g": { "type": "number" },
+        "fat_g": { "type": "number" },
+        "fiber_g": { "type": "number" },
+        "serving_size_g": { "type": "number" },
+        "ingredients_text": { "type": "string", "maxLength": 500 },
+        "allergen_ids": { "type": "array" },
+        "dietary_pref_ids": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["provider_id", "category_id", "name", "description", "price", "portion_description", "image_url", "prep_time_minutes", "is_available", "allergen_ids", "dietary_pref_ids", "createdAt", "updatedAt"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Customer order with database-verified pricing and status transitions.",
+      "type": "object",
+      "properties": {
+        "order_number": { "type": "string", "minLength": 3, "maxLength": 40 },
+        "student_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "student_name": { "type": "string", "maxLength": 120 },
+        "student_phone": { "type": "string", "maxLength": 30 },
+        "provider_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "provider_name": { "type": "string", "maxLength": 150 },
+        "delivery_partner_id": { "type": "string", "maxLength": 128 },
+        "delivery_partner_name": { "type": "string", "maxLength": 120 },
+        "delivery_partner_method": { "type": "string", "maxLength": 30 },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "accepted", "rejected", "preparing", "ready_for_pickup", "assigned", "picked_up", "out_for_delivery", "delivered", "cancelled"]
+        },
+        "fulfillment_type": { "type": "string", "enum": ["pickup", "delivery"] },
+        "delivery_location": { "type": "string", "maxLength": 300 },
+        "subtotal_amount": { "type": "number" },
+        "delivery_fee": { "type": "number" },
+        "total_amount": { "type": "number" },
+        "payment_method": { "type": "string", "enum": ["cash"] },
+        "payment_status": { "type": "string", "enum": ["unpaid", "paid"] },
+        "student_notes": { "type": "string", "maxLength": 500 },
+        "item_count": { "type": "integer" },
+        "items_summary": { "type": "array" },
+        "status_history": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["order_number", "student_id", "student_name", "provider_id", "provider_name", "status", "fulfillment_type", "delivery_location", "subtotal_amount", "delivery_fee", "total_amount", "payment_method", "payment_status", "student_notes", "item_count", "items_summary", "status_history", "createdAt", "updatedAt"]
+    },
+    "OrderItem": {
+      "title": "OrderItem",
+      "description": "Line item inside an order, validated against the meal document price.",
+      "type": "object",
+      "properties": {
+        "meal_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "meal_name": { "type": "string", "maxLength": 150 },
+        "quantity": { "type": "integer" },
+        "unit_price": { "type": "number" },
+        "line_total": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 300 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["meal_id", "meal_name", "quantity", "unit_price", "line_total", "notes", "createdAt"]
+    },
+    "DeliveryOffer": {
+      "title": "DeliveryOffer",
+      "description": "Non-PII delivery dispatch offer created when a kitchen marks a delivery order ready_for_pickup.",
+      "type": "object",
+      "properties": {
+        "order_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "order_number": { "type": "string", "maxLength": 40 },
+        "provider_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "provider_name": { "type": "string", "maxLength": 150 },
+        "pickup_address": { "type": "string", "maxLength": 300 },
+        "delivery_area_hint": { "type": "string", "maxLength": 150 },
+        "partner_earning": { "type": "number" },
+        "total_amount": { "type": "number" },
+        "status": { "type": "string", "enum": ["open", "claimed", "cancelled"] },
+        "delivery_partner_id": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["order_id", "order_number", "provider_id", "provider_name", "pickup_address", "partner_earning", "total_amount", "status", "createdAt", "updatedAt"]
+    },
+    "DeliveryTransaction": {
+      "title": "DeliveryTransaction",
+      "description": "Realized delivery payout & platform commission ledger record upon order delivery.",
+      "type": "object",
+      "properties": {
+        "order_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "order_number": { "type": "string", "maxLength": 40 },
+        "delivery_partner_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "customer_delivery_fee": { "type": "number" },
+        "partner_earning": { "type": "number" },
+        "platform_commission": { "type": "number" },
+        "status": { "type": "string", "enum": ["recorded", "settled"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["order_id", "order_number", "delivery_partner_id", "customer_delivery_fee", "partner_earning", "platform_commission", "status", "createdAt"]
+    },
+    "Review": {
+      "title": "Review",
+      "description": "Customer rating & review for a delivered order.",
+      "type": "object",
+      "properties": {
+        "order_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "student_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "provider_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "delivery_partner_id": { "type": "string", "maxLength": 128 },
+        "rating": { "type": "integer" },
+        "delivery_rating": { "type": "integer" },
+        "comment": { "type": "string", "maxLength": 1000 },
+        "delivery_comment": { "type": "string", "maxLength": 500 },
+        "provider_response": { "type": "string", "maxLength": 1000 },
+        "responded_at": { "type": "string", "format": "date-time" },
+        "is_visible": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["order_id", "student_id", "provider_id", "rating", "comment", "is_visible", "createdAt", "updatedAt"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "User notification document.",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "type": { "type": "string", "maxLength": 60 },
+        "title": { "type": "string", "maxLength": 150 },
+        "body": { "type": "string", "maxLength": 500 },
+        "order_id": { "type": "string", "maxLength": 128 },
+        "status": { "type": "string", "enum": ["unread", "read"] },
+        "read_at": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["user_id", "type", "title", "body", "status", "createdAt"]
+    },
+    "Complaint": {
+      "title": "Complaint",
+      "description": "Order dispute or complaint submitted by a user.",
+      "type": "object",
+      "properties": {
+        "complainant_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "against_user_id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "order_id": { "type": "string", "maxLength": 128 },
+        "subject": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string", "enum": ["open", "in_review", "resolved", "dismissed"] },
+        "resolved_by": { "type": "string", "maxLength": 128 },
+        "resolution_note": { "type": "string", "maxLength": 500 },
+        "resolved_at": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["complainant_id", "against_user_id", "subject", "description", "status", "createdAt", "updatedAt"]
+    },
+    "LookupItem": {
+      "title": "LookupItem",
+      "description": "Admin-managed taxonomy item (university, meal category, allergen, dietary preference).",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "maxLength": 80 },
+        "name_ar": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "name_en": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "city": { "type": "string", "maxLength": 100 },
+        "governorate": { "type": "string", "maxLength": 100 },
+        "sort_order": { "type": "integer" },
+        "is_active": { "type": "boolean" },
+        "is_restriction": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name_ar", "name_en", "createdAt"]
+    },
+    "DeliveryPricingConfig": {
+      "title": "DeliveryPricingConfig",
+      "description": "Admin-configured delivery fees and commission rules.",
+      "type": "object",
+      "properties": {
+        "customer_delivery_fee": { "type": "number" },
+        "partner_earning": { "type": "number" },
+        "platform_commission": { "type": "number" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["customer_delivery_fee", "partner_earning", "platform_commission", "updatedAt"]
+    },
+    "LokmaBoxLead": {
+      "title": "LokmaBoxLead",
+      "description": "Pre-launch market validation interest lead submitted by a student with explicit communication consent.",
+      "type": "object",
+      "properties": {
+        "full_name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "phone": { "type": "string", "minLength": 8, "maxLength": 25 },
+        "email": { "type": "string", "maxLength": 150 },
+        "university_id": { "type": "string", "maxLength": 128 },
+        "university_name": { "type": "string", "minLength": 2, "maxLength": 150 },
+        "housing_area": { "type": "string", "minLength": 2, "maxLength": 200 },
+        "wants_to_try": { "type": "string", "enum": ["yes", "maybe", "no"] },
+        "consent_accepted": { "type": "boolean" },
+        "consent_accepted_at": { "type": "string", "format": "date-time" },
+        "user_id": { "type": "string", "maxLength": 128 },
+        "source": { "type": "string", "enum": ["landing_lokma_box"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["full_name", "phone", "university_name", "housing_area", "wants_to_try", "consent_accepted", "consent_accepted_at", "source", "createdAt"]
+    },
+    "LokmaBoxSurvey": {
+      "title": "LokmaBoxSurvey",
+      "description": "Pre-launch student market validation survey responses for LOKMA BOX.",
+      "type": "object",
+      "properties": {
+        "daily_prep_difficulty": { "type": "string", "enum": ["always", "sometimes", "rarely", "no"] },
+        "biggest_food_problem": { "type": "string", "enum": ["time", "cost", "cooking_skills", "ingredients_waste", "quality_hygiene", "variety"] },
+        "preferred_meal_types": { "type": "array" },
+        "preferred_prep_time": { "type": "string", "enum": ["under_10_min", "10_to_20_min", "20_to_30_min", "ready_heat"] },
+        "preferred_budget_tier": { "type": "string", "enum": ["under_50", "50_to_75", "75_to_100", "over_100"] },
+        "purchase_frequency": { "type": "string", "enum": ["daily", "2_to_3_weekly", "weekly", "biweekly", "monthly"] },
+        "preferred_box_timing": { "type": "string", "enum": ["breakfast", "lunch", "dinner", "mixed"] },
+        "willing_to_buy": { "type": "string", "enum": ["yes", "maybe", "no"] },
+        "suggestions": { "type": "string", "maxLength": 1000 },
+        "university_name": { "type": "string", "maxLength": 150 },
+        "consent_accepted": { "type": "boolean" },
+        "user_id": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "daily_prep_difficulty",
+        "biggest_food_problem",
+        "preferred_meal_types",
+        "preferred_prep_time",
+        "preferred_budget_tier",
+        "purchase_frequency",
+        "preferred_box_timing",
+        "willing_to_buy",
+        "suggestions",
+        "consent_accepted",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminMarker" },
+      "description": "Verified platform administrator UID markers."
+    },
+    "/user_roles/{userId}": {
+      "schema": { "$ref": "#/entities/UserRole" },
+      "description": "Per-user role assignments (admin or user) enforced on read/write."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Authenticated LOKMA user accounts."
+    },
+    "/phone_accounts/{phoneHash}": {
+      "schema": { "$ref": "#/entities/PhoneAccount" },
+      "description": "Non-PII phone uniqueness registry keyed by SHA-256 of E.164 phone."
+    },
+    "/student_profiles/{userId}": {
+      "schema": { "$ref": "#/entities/StudentProfile" },
+      "description": "Student budget, location, and dietary profile."
+    },
+    "/provider_profiles/{userId}": {
+      "schema": { "$ref": "#/entities/ProviderProfile" },
+      "description": "Home food provider kitchen profiles."
+    },
+    "/delivery_partner_profiles/{userId}": {
+      "schema": { "$ref": "#/entities/DeliveryPartnerProfile" },
+      "description": "Student delivery partner profiles."
+    },
+    "/meals/{mealId}": {
+      "schema": { "$ref": "#/entities/Meal" },
+      "description": "Homemade meals created by providers."
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/Order" },
+      "description": "Customer orders."
+    },
+    "/orders/{orderId}/items/{itemId}": {
+      "schema": { "$ref": "#/entities/OrderItem" },
+      "description": "Validated order line items."
+    },
+    "/delivery_offers/{orderId}": {
+      "schema": { "$ref": "#/entities/DeliveryOffer" },
+      "description": "Non-PII delivery dispatch pool for verified delivery partners."
+    },
+    "/delivery_transactions/{txId}": {
+      "schema": { "$ref": "#/entities/DeliveryTransaction" },
+      "description": "Completed delivery financial ledger entries."
+    },
+    "/reviews/{reviewId}": {
+      "schema": { "$ref": "#/entities/Review" },
+      "description": "Delivered order ratings and kitchen replies."
+    },
+    "/notifications/{notifId}": {
+      "schema": { "$ref": "#/entities/Notification" },
+      "description": "Per-user operational notifications."
+    },
+    "/complaints/{complaintId}": {
+      "schema": { "$ref": "#/entities/Complaint" },
+      "description": "Order complaints and admin resolutions."
+    },
+    "/universities/{uniId}": {
+      "schema": { "$ref": "#/entities/LookupItem" },
+      "description": "Supported universities."
+    },
+    "/meal_categories/{catId}": {
+      "schema": { "$ref": "#/entities/LookupItem" },
+      "description": "Meal categories."
+    },
+    "/allergens/{allergenId}": {
+      "schema": { "$ref": "#/entities/LookupItem" },
+      "description": "Food allergens."
+    },
+    "/dietary_preferences/{prefId}": {
+      "schema": { "$ref": "#/entities/LookupItem" },
+      "description": "Dietary tags and strict restrictions."
+    },
+    "/config/{configId}": {
+      "schema": { "$ref": "#/entities/DeliveryPricingConfig" },
+      "description": "Platform delivery pricing configuration."
+    },
+    "/lokma_box_leads/{leadId}": {
+      "schema": { "$ref": "#/entities/LokmaBoxLead" },
+      "description": "Pre-launch student interest signups for LOKMA BOX (Admin-only read, create-once deduped)."
+    },
+    "/lokma_box_surveys/{surveyId}": {
+      "schema": { "$ref": "#/entities/LokmaBoxSurvey" },
+      "description": "Pre-launch student market research survey responses for LOKMA BOX (Admin-only read)."
+    }
+  }
+}

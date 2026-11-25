@@ -1,0 +1,1119 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global safety net: default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // Global Helpers (Pillar 3, 4, 8)
+    // ------------------------------------------------------------------
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedEmail() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isVerifiedAccount() {
+      return isSignedIn() && (
+        request.auth.token.email_verified == true
+        || (request.auth.token.phone_number is string && request.auth.token.phone_number.size() >= 10)
+      );
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Zero-DB-read admin check safe for allow list
+    function isTokenAdmin() {
+      return isSignedIn()
+        && request.auth.token.email == 'ahmedgamal21705@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+
+    // Full admin check for single-document operations
+    function isAdmin() {
+      return isTokenAdmin()
+        || (isVerifiedEmail() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)))
+        || (
+          isVerifiedEmail()
+          && exists(/databases/$(database)/documents/user_roles/$(request.auth.uid))
+          && get(/databases/$(database)/documents/user_roles/$(request.auth.uid)).data.role == 'admin'
+        );
+    }
+
+    function isVerifiedDeliveryPartner() {
+      return isVerifiedAccount()
+        && exists(/databases/$(database)/documents/delivery_partner_profiles/$(request.auth.uid))
+        && get(/databases/$(database)/documents/delivery_partner_profiles/$(request.auth.uid)).data.verification_status == 'verified';
+    }
+
+    function isNumber(v) {
+      return v is int || v is float;
+    }
+
+    function expectedDeliveryFee(fulfillmentType) {
+      return fulfillmentType == 'pickup'
+        ? 0
+        : (exists(/databases/$(database)/documents/config/delivery_pricing)
+            ? get(/databases/$(database)/documents/config/delivery_pricing).data.customer_delivery_fee
+            : 15);
+    }
+
+    function expectedPartnerEarning() {
+      return exists(/databases/$(database)/documents/config/delivery_pricing)
+        ? get(/databases/$(database)/documents/config/delivery_pricing).data.partner_earning
+        : 12;
+    }
+
+    function expectedPlatformCommission() {
+      return exists(/databases/$(database)/documents/config/delivery_pricing)
+        ? get(/databases/$(database)/documents/config/delivery_pricing).data.platform_commission
+        : 3;
+    }
+
+    // ------------------------------------------------------------------
+    // Validation Blueprints (Pillar 2)
+    // ------------------------------------------------------------------
+    function isValidAdminMarker(data) {
+      return data.keys().hasAll(['email', 'createdAt'])
+        && data.keys().hasOnly(['email', 'createdAt'])
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 150
+        && data.createdAt is timestamp;
+    }
+
+    function isValidUserRole(data) {
+      return data.keys().hasAll(['user_id', 'email', 'role', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['user_id', 'email', 'role', 'createdAt', 'updatedAt'])
+        && isValidId(data.user_id)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 150
+        && data.role in ['admin', 'user']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['id', 'full_name', 'email', 'phone', 'role', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'full_name', 'email', 'phone', 'role', 'status',
+          'auth_method', 'email_verified', 'phone_verified', 'terms_accepted_at', 'last_login_at',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && data.full_name is string && data.full_name.size() >= 1 && data.full_name.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 150
+        && data.phone is string && data.phone.size() <= 30
+        && data.role in ['student', 'provider', 'delivery_partner', 'admin']
+        && data.status in ['active', 'pending', 'suspended']
+        && (!('auth_method' in data) || data.auth_method in ['email', 'phone', 'google'])
+        && (!('email_verified' in data) || data.email_verified is bool)
+        && (!('phone_verified' in data) || data.phone_verified is bool)
+        && (!('terms_accepted_at' in data) || data.terms_accepted_at == null || data.terms_accepted_at is timestamp)
+        && (!('last_login_at' in data) || data.last_login_at == null || data.last_login_at is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPhoneAccount(data) {
+      return data.keys().hasAll(['user_id', 'auth_method', 'phone_verified', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['user_id', 'auth_method', 'phone_verified', 'createdAt', 'updatedAt'])
+        && isValidId(data.user_id)
+        && data.auth_method in ['email', 'phone', 'google']
+        && data.phone_verified is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidStudentProfile(data) {
+      return data.keys().hasAll([
+          'user_id', 'university_id', 'faculty', 'daily_budget', 'weekly_budget',
+          'delivery_location', 'allergen_ids', 'dietary_pref_ids', 'category_prefs', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'user_id', 'university_id', 'university_name', 'faculty', 'academic_year',
+          'daily_budget', 'weekly_budget', 'delivery_location', 'allergen_ids',
+          'dietary_pref_ids', 'category_prefs', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.user_id)
+        && data.university_id is string && data.university_id.size() <= 128
+        && (!('university_name' in data) || (data.university_name is string && data.university_name.size() <= 150))
+        && data.faculty is string && data.faculty.size() <= 150
+        && (!('academic_year' in data) || (data.academic_year is int && data.academic_year >= 1 && data.academic_year <= 7))
+        && isNumber(data.daily_budget) && data.daily_budget >= 0 && data.daily_budget <= 10000
+        && isNumber(data.weekly_budget) && data.weekly_budget >= 0 && data.weekly_budget <= 50000
+        && data.delivery_location is string && data.delivery_location.size() <= 300
+        && data.allergen_ids is list && data.allergen_ids.size() <= 30
+        && (data.allergen_ids.size() == 0 || data.allergen_ids[0] is string)
+        && data.dietary_pref_ids is list && data.dietary_pref_ids.size() <= 30
+        && (data.dietary_pref_ids.size() == 0 || data.dietary_pref_ids[0] is string)
+        && data.category_prefs is map
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidProviderProfile(data) {
+      return data.keys().hasAll([
+          'user_id', 'university_id', 'business_name', 'bio', 'area', 'pickup_address',
+          'logo_url', 'verification_status', 'is_accepting_orders', 'avg_rating', 'review_count',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'user_id', 'university_id', 'business_name', 'bio', 'area', 'pickup_address',
+          'logo_url', 'verification_status', 'verified_by', 'verified_at', 'is_accepting_orders',
+          'avg_rating', 'review_count', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.user_id)
+        && data.university_id is string && data.university_id.size() <= 128
+        && data.business_name is string && data.business_name.size() >= 1 && data.business_name.size() <= 150
+        && data.bio is string && data.bio.size() <= 600
+        && data.area is string && data.area.size() >= 1 && data.area.size() <= 150
+        && data.pickup_address is string && data.pickup_address.size() >= 1 && data.pickup_address.size() <= 300
+        && data.logo_url is string && data.logo_url.size() <= 500000
+        && data.verification_status in ['pending', 'verified', 'rejected', 'suspended']
+        && (!('verified_by' in data) || data.verified_by == null || isValidId(data.verified_by))
+        && (!('verified_at' in data) || data.verified_at == null || data.verified_at is timestamp)
+        && data.is_accepting_orders is bool
+        && isNumber(data.avg_rating) && data.avg_rating >= 0 && data.avg_rating <= 5
+        && data.review_count is int && data.review_count >= 0
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDeliveryPartnerProfile(data) {
+      return data.keys().hasAll([
+          'user_id', 'full_name', 'university_id', 'national_id_last4', 'student_card_id',
+          'delivery_method', 'verification_status', 'is_online', 'availability_schedule',
+          'completed_deliveries', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'user_id', 'full_name', 'phone', 'university_id', 'national_id_last4', 'student_card_id',
+          'delivery_method', 'verification_status', 'verified_by', 'verified_at', 'is_online',
+          'availability_schedule', 'completed_deliveries', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.user_id)
+        && data.full_name is string && data.full_name.size() >= 1 && data.full_name.size() <= 120
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 30))
+        && data.university_id is string && data.university_id.size() <= 128
+        && data.national_id_last4 is string && data.national_id_last4.matches('^[0-9]{4}$')
+        && data.student_card_id is string && data.student_card_id.size() >= 2 && data.student_card_id.size() <= 50
+        && data.delivery_method in ['walking', 'bicycle']
+        && data.verification_status in ['pending', 'verified', 'rejected', 'suspended']
+        && (!('verified_by' in data) || data.verified_by == null || isValidId(data.verified_by))
+        && (!('verified_at' in data) || data.verified_at == null || data.verified_at is timestamp)
+        && data.is_online is bool
+        && data.availability_schedule is string && data.availability_schedule.size() <= 150
+        && data.completed_deliveries is int && data.completed_deliveries >= 0
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidMeal(data) {
+      return data.keys().hasAll([
+          'provider_id', 'category_id', 'name', 'description', 'price',
+          'portion_description', 'image_url', 'prep_time_minutes', 'is_available',
+          'allergen_ids', 'dietary_pref_ids', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'provider_id', 'provider_name', 'category_id', 'name', 'name_ar', 'description', 'price',
+          'portion_description', 'image_url', 'prep_time_minutes', 'is_available', 'deleted_at',
+          'calories_kcal', 'protein_g', 'carbs_g', 'fat_g', 'fiber_g', 'serving_size_g',
+          'ingredients_text', 'allergen_ids', 'dietary_pref_ids', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.provider_id)
+        && (!('provider_name' in data) || (data.provider_name is string && data.provider_name.size() <= 150))
+        && data.category_id is string && data.category_id.size() <= 128
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 150
+        && (!('name_ar' in data) || (data.name_ar is string && data.name_ar.size() <= 150))
+        && data.description is string && data.description.size() <= 1000
+        && isNumber(data.price) && data.price > 0 && data.price <= 10000
+        && data.portion_description is string && data.portion_description.size() <= 150
+        && data.image_url is string && data.image_url.size() <= 600000
+        && (data.image_url == '' || data.image_url.matches('^(https://|data:image/).*$'))
+        && data.prep_time_minutes is int && data.prep_time_minutes >= 1 && data.prep_time_minutes <= 300
+        && data.is_available is bool
+        && (!('deleted_at' in data) || data.deleted_at == null || (data.deleted_at is timestamp && data.is_available == false))
+        && (!('calories_kcal' in data) || (isNumber(data.calories_kcal) && data.calories_kcal >= 0 && data.calories_kcal <= 5000))
+        && (!('protein_g' in data) || (isNumber(data.protein_g) && data.protein_g >= 0 && data.protein_g <= 500))
+        && (!('carbs_g' in data) || (isNumber(data.carbs_g) && data.carbs_g >= 0 && data.carbs_g <= 500))
+        && (!('fat_g' in data) || (isNumber(data.fat_g) && data.fat_g >= 0 && data.fat_g <= 500))
+        && (!('fiber_g' in data) || (isNumber(data.fiber_g) && data.fiber_g >= 0 && data.fiber_g <= 200))
+        && (!('serving_size_g' in data) || (isNumber(data.serving_size_g) && data.serving_size_g >= 0 && data.serving_size_g <= 5000))
+        && (!('ingredients_text' in data) || (data.ingredients_text is string && data.ingredients_text.size() <= 500))
+        && data.allergen_ids is list && data.allergen_ids.size() <= 20
+        && (data.allergen_ids.size() == 0 || data.allergen_ids[0] is string)
+        && data.dietary_pref_ids is list && data.dietary_pref_ids.size() <= 20
+        && (data.dietary_pref_ids.size() == 0 || data.dietary_pref_ids[0] is string)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidOrderItem(data) {
+      return data.keys().hasAll(['meal_id', 'meal_name', 'quantity', 'unit_price', 'line_total', 'notes', 'createdAt'])
+        && data.keys().hasOnly(['meal_id', 'meal_name', 'quantity', 'unit_price', 'line_total', 'notes', 'createdAt'])
+        && isValidId(data.meal_id)
+        && data.meal_name is string && data.meal_name.size() >= 1 && data.meal_name.size() <= 150
+        && data.quantity is int && data.quantity >= 1 && data.quantity <= 20
+        && isNumber(data.unit_price) && data.unit_price > 0 && data.unit_price <= 10000
+        && isNumber(data.line_total) && data.line_total > 0
+        && math.abs(data.line_total - (data.unit_price * data.quantity)) < 0.02
+        && data.notes is string && data.notes.size() <= 300
+        && data.createdAt is timestamp;
+    }
+
+    function isValidOrder(data) {
+      return data.keys().hasAll([
+          'order_number', 'student_id', 'student_name', 'provider_id', 'provider_name',
+          'status', 'fulfillment_type', 'delivery_location', 'subtotal_amount', 'delivery_fee',
+          'total_amount', 'payment_method', 'payment_status', 'student_notes', 'item_count',
+          'items_summary', 'status_history', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'order_number', 'student_id', 'student_name', 'student_phone', 'provider_id', 'provider_name',
+          'delivery_partner_id', 'delivery_partner_name', 'delivery_partner_method',
+          'status', 'fulfillment_type', 'delivery_location', 'subtotal_amount', 'delivery_fee',
+          'total_amount', 'payment_method', 'payment_status', 'student_notes', 'item_count',
+          'items_summary', 'status_history', 'createdAt', 'updatedAt'
+        ])
+        && data.order_number is string && data.order_number.size() >= 3 && data.order_number.size() <= 40
+        && isValidId(data.student_id)
+        && data.student_name is string && data.student_name.size() >= 1 && data.student_name.size() <= 120
+        && (!('student_phone' in data) || (data.student_phone is string && data.student_phone.size() <= 30))
+        && isValidId(data.provider_id)
+        && data.provider_name is string && data.provider_name.size() >= 1 && data.provider_name.size() <= 150
+        && (!('delivery_partner_id' in data) || data.delivery_partner_id == null || isValidId(data.delivery_partner_id))
+        && (!('delivery_partner_name' in data) || data.delivery_partner_name == null || (data.delivery_partner_name is string && data.delivery_partner_name.size() <= 120))
+        && (!('delivery_partner_method' in data) || data.delivery_partner_method == null || (data.delivery_partner_method is string && data.delivery_partner_method.size() <= 30))
+        && data.status in ['pending', 'accepted', 'rejected', 'preparing', 'ready_for_pickup', 'assigned', 'picked_up', 'out_for_delivery', 'delivered', 'cancelled']
+        && data.fulfillment_type in ['pickup', 'delivery']
+        && data.delivery_location is string && data.delivery_location.size() <= 300
+        && (data.fulfillment_type == 'pickup' || data.delivery_location.size() >= 2)
+        && isNumber(data.subtotal_amount) && data.subtotal_amount > 0
+        && isNumber(data.delivery_fee) && data.delivery_fee >= 0
+        && isNumber(data.total_amount) && data.total_amount > 0
+        && math.abs(data.total_amount - (data.subtotal_amount + data.delivery_fee)) < 0.02
+        && data.payment_method == 'cash'
+        && data.payment_status in ['unpaid', 'paid']
+        && data.student_notes is string && data.student_notes.size() <= 500
+        && data.item_count is int && data.item_count >= 1 && data.item_count <= 5
+        && data.items_summary is list && data.items_summary.size() == data.item_count && data.items_summary[0] is map
+        && data.status_history is list && data.status_history.size() >= 1 && data.status_history.size() <= 20 && data.status_history[0] is map
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function orderItemsSubtotalMatches(orderId, count, subtotal) {
+      return (
+        (count == 1 && math.abs(subtotal - getAfter(/databases/$(database)/documents/orders/$(orderId)/items/item_0).data.line_total) < 0.02)
+        || (count == 2 && math.abs(subtotal - (
+          getAfter(/databases/$(database)/documents/orders/$(orderId)/items/item_0).data.line_total +
+          getAfter(/databases/$(database)/documents/orders/$(orderId)/items/item_1).data.line_total
+        )) < 0.02)
+        || (count == 3 && math.abs(subtotal - (
+          getAfter(/databases/$(database)/documents/orders/$(orderId)/items/item_0).data.line_total +
+          getAfter(/databases/$(database)/documents/orders/$(orderId)/items/item_1).data.line_total +
+          getAfter(/databases/$(database)/documents/orders/$(orderId)/items/item_2).data.line_total
+        )) < 0.02)
+        || (count == 4 && math.abs(subtotal - (
+          getAfter(/databases/$(database)/documents/orders/$(orderId)/items/item_0).data.line_total +
+          getAfter(/databases/$(database)/documents/orders/$(orderId)/items/item_1).data.line_total +
+          getAfter(/databases/$(database)/documents/orders/$(orderId)/items/item_2).data.line_total +
+          getAfter(/databases/$(database)/documents/orders/$(orderId)/items/item_3).data.line_total
+        )) < 0.02)
+        || (count == 5 && math.abs(subtotal - (
+          getAfter(/databases/$(database)/documents/orders/$(orderId)/items/item_0).data.line_total +
+          getAfter(/databases/$(database)/documents/orders/$(orderId)/items/item_1).data.line_total +
+          getAfter(/databases/$(database)/documents/orders/$(orderId)/items/item_2).data.line_total +
+          getAfter(/databases/$(database)/documents/orders/$(orderId)/items/item_3).data.line_total +
+          getAfter(/databases/$(database)/documents/orders/$(orderId)/items/item_4).data.line_total
+        )) < 0.02)
+      );
+    }
+
+    function isValidDeliveryOffer(data) {
+      return data.keys().hasAll([
+          'order_id', 'order_number', 'provider_id', 'provider_name', 'pickup_address',
+          'partner_earning', 'total_amount', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'order_id', 'order_number', 'provider_id', 'provider_name', 'pickup_address',
+          'delivery_area_hint', 'partner_earning', 'total_amount', 'status', 'delivery_partner_id',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.order_id)
+        && data.order_number is string && data.order_number.size() >= 3 && data.order_number.size() <= 40
+        && isValidId(data.provider_id)
+        && data.provider_name is string && data.provider_name.size() >= 1 && data.provider_name.size() <= 150
+        && data.pickup_address is string && data.pickup_address.size() >= 1 && data.pickup_address.size() <= 300
+        && (!('delivery_area_hint' in data) || (data.delivery_area_hint is string && data.delivery_area_hint.size() <= 150))
+        && isNumber(data.partner_earning) && data.partner_earning >= 0
+        && isNumber(data.total_amount) && data.total_amount > 0
+        && data.status in ['open', 'claimed', 'cancelled']
+        && (!('delivery_partner_id' in data) || data.delivery_partner_id == null || isValidId(data.delivery_partner_id))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDeliveryTransaction(data) {
+      return data.keys().hasAll([
+          'order_id', 'order_number', 'delivery_partner_id', 'customer_delivery_fee',
+          'partner_earning', 'platform_commission', 'status', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'order_id', 'order_number', 'delivery_partner_id', 'customer_delivery_fee',
+          'partner_earning', 'platform_commission', 'status', 'createdAt'
+        ])
+        && isValidId(data.order_id)
+        && data.order_number is string && data.order_number.size() <= 40
+        && isValidId(data.delivery_partner_id)
+        && isNumber(data.customer_delivery_fee) && data.customer_delivery_fee >= 0
+        && isNumber(data.partner_earning) && data.partner_earning >= 0
+        && isNumber(data.platform_commission) && data.platform_commission >= 0
+        && data.status in ['recorded', 'settled']
+        && data.createdAt is timestamp;
+    }
+
+    function isValidReview(data) {
+      return data.keys().hasAll(['order_id', 'student_id', 'provider_id', 'rating', 'comment', 'is_visible', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'order_id', 'student_id', 'provider_id', 'delivery_partner_id', 'rating',
+          'delivery_rating', 'comment', 'delivery_comment', 'provider_response',
+          'responded_at', 'is_visible', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.order_id)
+        && isValidId(data.student_id)
+        && isValidId(data.provider_id)
+        && (!('delivery_partner_id' in data) || data.delivery_partner_id == null || isValidId(data.delivery_partner_id))
+        && data.rating is int && data.rating >= 1 && data.rating <= 5
+        && (!('delivery_rating' in data) || data.delivery_rating == null || (data.delivery_rating is int && data.delivery_rating >= 1 && data.delivery_rating <= 5))
+        && data.comment is string && data.comment.size() <= 1000
+        && (!('delivery_comment' in data) || data.delivery_comment == null || (data.delivery_comment is string && data.delivery_comment.size() <= 500))
+        && (!('provider_response' in data) || data.provider_response == null || (data.provider_response is string && data.provider_response.size() <= 1000))
+        && (!('responded_at' in data) || data.responded_at == null || data.responded_at is timestamp)
+        && data.is_visible is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidNotification(data) {
+      return data.keys().hasAll(['user_id', 'type', 'title', 'body', 'status', 'createdAt'])
+        && data.keys().hasOnly(['user_id', 'type', 'title', 'body', 'order_id', 'status', 'read_at', 'createdAt'])
+        && isValidId(data.user_id)
+        && data.type is string && data.type.size() >= 1 && data.type.size() <= 60
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 150
+        && data.body is string && data.body.size() >= 1 && data.body.size() <= 500
+        && (!('order_id' in data) || data.order_id == null || isValidId(data.order_id))
+        && data.status in ['unread', 'read']
+        && (!('read_at' in data) || data.read_at == null || data.read_at is timestamp)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidComplaint(data) {
+      return data.keys().hasAll(['complainant_id', 'against_user_id', 'subject', 'description', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'complainant_id', 'against_user_id', 'order_id', 'subject', 'description',
+          'status', 'resolved_by', 'resolution_note', 'resolved_at', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.complainant_id)
+        && isValidId(data.against_user_id)
+        && (!('order_id' in data) || data.order_id == null || isValidId(data.order_id))
+        && data.subject is string && data.subject.size() >= 1 && data.subject.size() <= 150
+        && data.description is string && data.description.size() <= 1000
+        && data.status in ['open', 'in_review', 'resolved', 'dismissed']
+        && (!('resolved_by' in data) || data.resolved_by == null || isValidId(data.resolved_by))
+        && (!('resolution_note' in data) || data.resolution_note == null || (data.resolution_note is string && data.resolution_note.size() <= 500))
+        && (!('resolved_at' in data) || data.resolved_at == null || data.resolved_at is timestamp)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLookupItem(data) {
+      return data.keys().hasAll(['name_ar', 'name_en', 'createdAt'])
+        && data.keys().hasOnly(['code', 'name_ar', 'name_en', 'city', 'governorate', 'sort_order', 'is_active', 'is_restriction', 'createdAt'])
+        && (!('code' in data) || (data.code is string && data.code.size() <= 80))
+        && data.name_ar is string && data.name_ar.size() >= 1 && data.name_ar.size() <= 120
+        && data.name_en is string && data.name_en.size() >= 1 && data.name_en.size() <= 120
+        && (!('city' in data) || (data.city is string && data.city.size() <= 100))
+        && (!('governorate' in data) || (data.governorate is string && data.governorate.size() <= 100))
+        && (!('sort_order' in data) || data.sort_order is int)
+        && (!('is_active' in data) || data.is_active is bool)
+        && (!('is_restriction' in data) || data.is_restriction is bool)
+        && data.createdAt is timestamp;
+    }
+
+    function isValidPricingConfig(data) {
+      return data.keys().hasAll(['customer_delivery_fee', 'partner_earning', 'platform_commission', 'updatedAt'])
+        && data.keys().hasOnly(['customer_delivery_fee', 'partner_earning', 'platform_commission', 'updatedAt'])
+        && isNumber(data.customer_delivery_fee) && data.customer_delivery_fee >= 0 && data.customer_delivery_fee <= 500
+        && isNumber(data.partner_earning) && data.partner_earning >= 0 && data.partner_earning <= 500
+        && isNumber(data.platform_commission) && data.platform_commission >= 0 && data.platform_commission <= 500
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLokmaBoxLead(data) {
+      return data.keys().hasAll([
+          'full_name', 'phone', 'university_name', 'housing_area', 'wants_to_try',
+          'consent_accepted', 'consent_accepted_at', 'source', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'full_name', 'phone', 'email', 'university_id', 'university_name',
+          'housing_area', 'wants_to_try', 'consent_accepted', 'consent_accepted_at',
+          'user_id', 'source', 'createdAt'
+        ])
+        && data.full_name is string && data.full_name.size() >= 2 && data.full_name.size() <= 120
+        && data.phone is string && data.phone.size() >= 8 && data.phone.size() <= 25
+        && (!('email' in data) || data.email == null || (data.email is string && data.email.size() <= 150))
+        && (!('university_id' in data) || data.university_id == null || (data.university_id is string && data.university_id.size() <= 128))
+        && data.university_name is string && data.university_name.size() >= 2 && data.university_name.size() <= 150
+        && data.housing_area is string && data.housing_area.size() >= 2 && data.housing_area.size() <= 200
+        && data.wants_to_try in ['yes', 'maybe', 'no']
+        && data.consent_accepted == true
+        && data.consent_accepted_at is timestamp
+        && (!('user_id' in data) || data.user_id == null || isValidId(data.user_id))
+        && data.source == 'landing_lokma_box'
+        && data.createdAt is timestamp;
+    }
+
+    function isValidLokmaBoxSurvey(data) {
+      return data.keys().hasAll([
+          'daily_prep_difficulty', 'biggest_food_problem', 'preferred_meal_types',
+          'preferred_prep_time', 'preferred_budget_tier', 'purchase_frequency',
+          'preferred_box_timing', 'willing_to_buy', 'suggestions', 'consent_accepted', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'daily_prep_difficulty', 'biggest_food_problem', 'preferred_meal_types',
+          'preferred_prep_time', 'preferred_budget_tier', 'purchase_frequency',
+          'preferred_box_timing', 'willing_to_buy', 'suggestions', 'university_name',
+          'consent_accepted', 'user_id', 'createdAt'
+        ])
+        && data.daily_prep_difficulty in ['always', 'sometimes', 'rarely', 'no']
+        && data.biggest_food_problem in ['time', 'cost', 'cooking_skills', 'ingredients_waste', 'quality_hygiene', 'variety']
+        && data.preferred_meal_types is list
+        && data.preferred_meal_types.size() >= 1
+        && data.preferred_meal_types.size() <= 6
+        && data.preferred_meal_types[0] is string
+        && data.preferred_prep_time in ['under_10_min', '10_to_20_min', '20_to_30_min', 'ready_heat']
+        && data.preferred_budget_tier in ['under_50', '50_to_75', '75_to_100', 'over_100']
+        && data.purchase_frequency in ['daily', '2_to_3_weekly', 'weekly', 'biweekly', 'monthly']
+        && data.preferred_box_timing in ['breakfast', 'lunch', 'dinner', 'mixed']
+        && data.willing_to_buy in ['yes', 'maybe', 'no']
+        && data.suggestions is string && data.suggestions.size() <= 1000
+        && (!('university_name' in data) || data.university_name == null || (data.university_name is string && data.university_name.size() <= 150))
+        && data.consent_accepted == true
+        && (!('user_id' in data) || data.user_id == null || isValidId(data.user_id))
+        && data.createdAt is timestamp;
+    }
+
+    // ------------------------------------------------------------------
+    // Connection check doc
+    // ------------------------------------------------------------------
+    match /test/connection {
+      allow get: if true;
+      allow list, write: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // Admins
+    // ------------------------------------------------------------------
+    match /admins/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isTokenAdmin();
+      allow create: if isValidId(userId) && isVerifiedEmail() && isValidAdminMarker(incoming())
+        && incoming().createdAt == request.time
+        && (isTokenAdmin() || isAdmin());
+      allow update, delete: if isValidId(userId) && isAdmin();
+    }
+
+    // ------------------------------------------------------------------
+    // User Roles (RBAC — self-escalation to admin blocked)
+    // ------------------------------------------------------------------
+    match /user_roles/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isTokenAdmin();
+      allow create: if isValidId(userId) && isVerifiedAccount() && isValidUserRole(incoming())
+        && incoming().user_id == userId
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isTokenAdmin()
+          || isAdmin()
+          || (isOwner(userId) && incoming().role == 'user')
+        );
+      allow update: if isValidId(userId) && isVerifiedEmail() && isValidUserRole(incoming())
+        && isAdmin()
+        && incoming().user_id == existing().user_id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // ------------------------------------------------------------------
+    // Users (PII isolated to owner & admin; role escalation blocked)
+    // ------------------------------------------------------------------
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isTokenAdmin();
+      allow create: if isValidId(userId) && isVerifiedAccount() && isValidUser(incoming())
+        && isOwner(userId)
+        && incoming().id == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin()
+          || (incoming().role in ['student', 'provider', 'delivery_partner'] && incoming().status == 'active')
+        );
+      allow update: if isValidId(userId) && isVerifiedAccount() && isValidUser(incoming()) && (
+        isAdmin() || (
+          isOwner(userId)
+          && incoming().id == existing().id
+          && incoming().email == existing().email
+          && incoming().role == existing().role
+          && incoming().status == existing().status
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'full_name', 'phone', 'email_verified', 'phone_verified', 'last_login_at', 'updatedAt'
+          ])
+        )
+      );
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // ------------------------------------------------------------------
+    // Non-PII Phone Registry (prevents duplicate phone numbers)
+    // ------------------------------------------------------------------
+    match /phone_accounts/{phoneHash} {
+      allow get: if isValidId(phoneHash);
+      allow list: if false;
+      allow create: if isValidId(phoneHash) && isVerifiedAccount() && isValidPhoneAccount(incoming())
+        && incoming().user_id == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(phoneHash) && isVerifiedAccount() && isValidPhoneAccount(incoming()) && (
+        isAdmin() || (
+          existing().user_id == request.auth.uid
+          && incoming().user_id == existing().user_id
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly(['phone_verified', 'auth_method', 'updatedAt'])
+        )
+      );
+      allow delete: if isValidId(phoneHash) && (
+        isAdmin() || (isVerifiedAccount() && existing().user_id == request.auth.uid)
+      );
+    }
+
+    // ------------------------------------------------------------------
+    // Student Profiles (PII isolated to owner & admin)
+    // ------------------------------------------------------------------
+    match /student_profiles/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isSignedIn() && (existing().user_id == request.auth.uid || isTokenAdmin());
+      allow create: if isValidId(userId) && isVerifiedAccount() && isOwner(userId)
+        && isValidStudentProfile(incoming())
+        && incoming().user_id == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) && isVerifiedAccount() && isValidStudentProfile(incoming()) && (
+        isAdmin() || (
+          isOwner(userId)
+          && incoming().user_id == existing().user_id
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'university_id', 'university_name', 'faculty', 'academic_year',
+            'daily_budget', 'weekly_budget', 'delivery_location', 'allergen_ids',
+            'dietary_pref_ids', 'category_prefs', 'updatedAt'
+          ])
+        )
+      );
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // ------------------------------------------------------------------
+    // Provider Profiles
+    // ------------------------------------------------------------------
+    match /provider_profiles/{userId} {
+      allow get: if isValidId(userId) && (
+        existing().verification_status == 'verified'
+        || isOwner(userId)
+        || isAdmin()
+      );
+      allow list: if existing().verification_status == 'verified'
+        || (isSignedIn() && (existing().user_id == request.auth.uid || isTokenAdmin()));
+      allow create: if isValidId(userId) && isVerifiedAccount() && isOwner(userId)
+        && isValidProviderProfile(incoming())
+        && incoming().user_id == request.auth.uid
+        && incoming().verification_status == 'pending'
+        && (!('verified_by' in incoming()) || incoming().verified_by == null)
+        && (!('verified_at' in incoming()) || incoming().verified_at == null)
+        && incoming().avg_rating == 0
+        && incoming().review_count == 0
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) && isVerifiedAccount() && isValidProviderProfile(incoming()) && (
+        isAdmin() || (
+          isOwner(userId)
+          && incoming().user_id == existing().user_id
+          && incoming().verification_status == existing().verification_status
+          && incoming().avg_rating == existing().avg_rating
+          && incoming().review_count == existing().review_count
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'university_id', 'business_name', 'bio', 'area', 'pickup_address',
+            'logo_url', 'is_accepting_orders', 'updatedAt'
+          ])
+        )
+      );
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // ------------------------------------------------------------------
+    // Delivery Partner Profiles (PII isolated to owner & admin)
+    // ------------------------------------------------------------------
+    match /delivery_partner_profiles/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isSignedIn() && (existing().user_id == request.auth.uid || isTokenAdmin());
+      allow create: if isValidId(userId) && isVerifiedAccount() && isOwner(userId)
+        && isValidDeliveryPartnerProfile(incoming())
+        && incoming().user_id == request.auth.uid
+        && incoming().verification_status == 'pending'
+        && (!('verified_by' in incoming()) || incoming().verified_by == null)
+        && (!('verified_at' in incoming()) || incoming().verified_at == null)
+        && incoming().is_online == false
+        && incoming().completed_deliveries == 0
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId) && isVerifiedAccount() && isValidDeliveryPartnerProfile(incoming()) && (
+        isAdmin() || (
+          isOwner(userId)
+          && incoming().user_id == existing().user_id
+          && incoming().verification_status == existing().verification_status
+          && incoming().national_id_last4 == existing().national_id_last4
+          && incoming().student_card_id == existing().student_card_id
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (incoming().is_online == false || existing().verification_status == 'verified')
+          && (
+            incoming().diff(existing()).affectedKeys().hasOnly([
+              'delivery_method', 'is_online', 'availability_schedule', 'phone', 'full_name', 'updatedAt'
+            ])
+            || (
+              incoming().completed_deliveries == existing().completed_deliveries + 1
+              && incoming().diff(existing()).affectedKeys().hasOnly(['completed_deliveries', 'updatedAt'])
+            )
+          )
+        )
+      );
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    // ------------------------------------------------------------------
+    // Meals
+    // ------------------------------------------------------------------
+    match /meals/{mealId} {
+      allow get: if isValidId(mealId) && (
+        (existing().deleted_at == null && existing().is_available == true)
+        || (isSignedIn() && (existing().provider_id == request.auth.uid || isAdmin()))
+      );
+      allow list: if existing().is_available == true
+        || (isSignedIn() && (existing().provider_id == request.auth.uid || isTokenAdmin()));
+      allow create: if isValidId(mealId) && isVerifiedAccount() && isValidMeal(incoming())
+        && (!('deleted_at' in incoming()) || incoming().deleted_at == null)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          (
+            isAdmin()
+            && exists(/databases/$(database)/documents/provider_profiles/$(incoming().provider_id))
+          )
+          || (
+            incoming().provider_id == request.auth.uid
+            && exists(/databases/$(database)/documents/provider_profiles/$(request.auth.uid))
+          )
+        );
+      allow update: if isValidId(mealId) && isVerifiedAccount() && isValidMeal(incoming()) && (
+        isAdmin() || (
+          existing().provider_id == request.auth.uid
+          && incoming().provider_id == existing().provider_id
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+        )
+      );
+      allow delete: if isValidId(mealId) && (
+        isAdmin() || (isVerifiedAccount() && existing().provider_id == request.auth.uid)
+      );
+    }
+
+    // ------------------------------------------------------------------
+    // Orders & Line Items (DB-verified prices & totals)
+    // ------------------------------------------------------------------
+    match /orders/{orderId} {
+      allow get: if isValidId(orderId) && isSignedIn() && (
+        existing().student_id == request.auth.uid
+        || existing().provider_id == request.auth.uid
+        || existing().delivery_partner_id == request.auth.uid
+        || isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        existing().student_id == request.auth.uid
+        || existing().provider_id == request.auth.uid
+        || existing().delivery_partner_id == request.auth.uid
+        || isTokenAdmin()
+      );
+      allow create: if isValidId(orderId) && isVerifiedAccount() && isValidOrder(incoming())
+        && incoming().student_id == request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().payment_status == 'unpaid'
+        && (!('delivery_partner_id' in incoming()) || incoming().delivery_partner_id == null)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && get(/databases/$(database)/documents/provider_profiles/$(incoming().provider_id)).data.verification_status == 'verified'
+        && get(/databases/$(database)/documents/provider_profiles/$(incoming().provider_id)).data.is_accepting_orders == true
+        && math.abs(incoming().delivery_fee - expectedDeliveryFee(incoming().fulfillment_type)) < 0.02
+        && orderItemsSubtotalMatches(orderId, incoming().item_count, incoming().subtotal_amount);
+
+      allow update: if isValidId(orderId) && isVerifiedAccount() && isValidOrder(incoming())
+        && incoming().student_id == existing().student_id
+        && incoming().provider_id == existing().provider_id
+        && incoming().subtotal_amount == existing().subtotal_amount
+        && incoming().delivery_fee == existing().delivery_fee
+        && incoming().total_amount == existing().total_amount
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin()
+          || (
+            !(existing().status in ['delivered', 'cancelled', 'rejected']) && (
+              // Student cancel while pending
+              (
+                existing().student_id == request.auth.uid
+                && existing().status == 'pending'
+                && incoming().status == 'cancelled'
+                && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'status_history', 'updatedAt'])
+              )
+              ||
+              // Provider workflow transitions
+              (
+                existing().provider_id == request.auth.uid
+                && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'payment_status', 'status_history', 'updatedAt'])
+                && (
+                  (existing().status == 'pending' && incoming().status in ['accepted', 'rejected'] && incoming().payment_status == existing().payment_status)
+                  || (existing().status == 'accepted' && incoming().status == 'preparing' && incoming().payment_status == existing().payment_status)
+                  || (existing().status == 'preparing' && incoming().status == 'ready_for_pickup' && incoming().payment_status == existing().payment_status)
+                  || (existing().status == 'ready_for_pickup' && existing().fulfillment_type == 'pickup' && incoming().status == 'delivered' && incoming().payment_status == 'paid')
+                )
+              )
+              ||
+              // Verified delivery partner claims an open ready_for_pickup delivery order
+              (
+                existing().fulfillment_type == 'delivery'
+                && existing().status == 'ready_for_pickup'
+                && existing().delivery_partner_id == null
+                && incoming().delivery_partner_id == request.auth.uid
+                && incoming().status == 'assigned'
+                && isVerifiedDeliveryPartner()
+                && incoming().diff(existing()).affectedKeys().hasOnly([
+                  'delivery_partner_id', 'delivery_partner_name', 'delivery_partner_method',
+                  'status', 'status_history', 'updatedAt'
+                ])
+              )
+              ||
+              // Assigned verified delivery partner advances delivery stages
+              (
+                existing().delivery_partner_id == request.auth.uid
+                && isVerifiedDeliveryPartner()
+                && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'payment_status', 'status_history', 'updatedAt'])
+                && (
+                  (existing().status == 'assigned' && incoming().status == 'picked_up' && incoming().payment_status == existing().payment_status)
+                  || (existing().status == 'picked_up' && incoming().status == 'out_for_delivery' && incoming().payment_status == existing().payment_status)
+                  || (existing().status == 'out_for_delivery' && incoming().status == 'delivered' && incoming().payment_status == 'paid')
+                )
+              )
+            )
+          )
+        );
+      allow delete: if isValidId(orderId) && isAdmin();
+
+      match /items/{itemId} {
+        allow get: if isValidId(orderId) && isValidId(itemId) && isSignedIn() && (
+          get(/databases/$(database)/documents/orders/$(orderId)).data.student_id == request.auth.uid
+          || get(/databases/$(database)/documents/orders/$(orderId)).data.provider_id == request.auth.uid
+          || get(/databases/$(database)/documents/orders/$(orderId)).data.delivery_partner_id == request.auth.uid
+          || isAdmin()
+        );
+        allow list: if isTokenAdmin();
+        allow create: if isValidId(orderId) && isValidId(itemId) && isVerifiedAccount()
+          && isValidOrderItem(incoming())
+          && incoming().createdAt == request.time
+          && getAfter(/databases/$(database)/documents/orders/$(orderId)).data.student_id == request.auth.uid
+          && get(/databases/$(database)/documents/meals/$(incoming().meal_id)).data.deleted_at == null
+          && get(/databases/$(database)/documents/meals/$(incoming().meal_id)).data.is_available == true
+          && get(/databases/$(database)/documents/meals/$(incoming().meal_id)).data.provider_id == getAfter(/databases/$(database)/documents/orders/$(orderId)).data.provider_id
+          && math.abs(incoming().unit_price - get(/databases/$(database)/documents/meals/$(incoming().meal_id)).data.price) < 0.02;
+        allow update, delete: if isValidId(orderId) && isValidId(itemId) && isAdmin();
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // Delivery Offers (Non-PII Dispatch Pool)
+    // ------------------------------------------------------------------
+    match /delivery_offers/{orderId} {
+      allow get: if isValidId(orderId) && isSignedIn() && (
+        existing().provider_id == request.auth.uid
+        || existing().delivery_partner_id == request.auth.uid
+        || (existing().status == 'open' && isVerifiedDeliveryPartner())
+        || isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        existing().status == 'open'
+        || existing().provider_id == request.auth.uid
+        || existing().delivery_partner_id == request.auth.uid
+        || isTokenAdmin()
+      );
+      allow create: if isValidId(orderId) && isVerifiedAccount() && isValidDeliveryOffer(incoming())
+        && incoming().order_id == orderId
+        && incoming().status == 'open'
+        && (!('delivery_partner_id' in incoming()) || incoming().delivery_partner_id == null)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin()
+          || (
+            incoming().provider_id == request.auth.uid
+            && getAfter(/databases/$(database)/documents/orders/$(orderId)).data.provider_id == request.auth.uid
+            && getAfter(/databases/$(database)/documents/orders/$(orderId)).data.status == 'ready_for_pickup'
+          )
+        );
+      allow update: if isValidId(orderId) && isVerifiedAccount() && isValidDeliveryOffer(incoming())
+        && incoming().order_id == existing().order_id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin()
+          || (
+            existing().status == 'open'
+            && incoming().status == 'claimed'
+            && incoming().delivery_partner_id == request.auth.uid
+            && isVerifiedDeliveryPartner()
+            && getAfter(/databases/$(database)/documents/orders/$(orderId)).data.delivery_partner_id == request.auth.uid
+            && getAfter(/databases/$(database)/documents/orders/$(orderId)).data.status == 'assigned'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'delivery_partner_id', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(orderId) && isAdmin();
+    }
+
+    // ------------------------------------------------------------------
+    // Delivery Transactions (Realized Payouts on Completed Deliveries)
+    // ------------------------------------------------------------------
+    match /delivery_transactions/{txId} {
+      allow get: if isValidId(txId) && isSignedIn() && (
+        existing().delivery_partner_id == request.auth.uid || isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        existing().delivery_partner_id == request.auth.uid || isTokenAdmin()
+      );
+      allow create: if isValidId(txId) && isVerifiedAccount() && isValidDeliveryTransaction(incoming())
+        && incoming().createdAt == request.time
+        && (
+          isAdmin()
+          || (
+            incoming().delivery_partner_id == request.auth.uid
+            && isVerifiedDeliveryPartner()
+            && get(/databases/$(database)/documents/orders/$(incoming().order_id)).data.delivery_partner_id == request.auth.uid
+            && getAfter(/databases/$(database)/documents/orders/$(incoming().order_id)).data.status == 'delivered'
+            && math.abs(incoming().partner_earning - expectedPartnerEarning()) < 0.02
+            && math.abs(incoming().platform_commission - expectedPlatformCommission()) < 0.02
+          )
+        );
+      allow update, delete: if isValidId(txId) && isAdmin();
+    }
+
+    // ------------------------------------------------------------------
+    // Reviews (One per delivered order; docId == orderId)
+    // ------------------------------------------------------------------
+    match /reviews/{reviewId} {
+      allow get: if isValidId(reviewId) && (
+        existing().is_visible == true
+        || (isSignedIn() && (
+          existing().student_id == request.auth.uid
+          || existing().provider_id == request.auth.uid
+          || existing().delivery_partner_id == request.auth.uid
+          || isAdmin()
+        ))
+      );
+      allow list: if existing().is_visible == true
+        || (isSignedIn() && (
+          existing().student_id == request.auth.uid
+          || existing().provider_id == request.auth.uid
+          || existing().delivery_partner_id == request.auth.uid
+          || isTokenAdmin()
+        ));
+      allow create: if isValidId(reviewId) && isVerifiedAccount() && isValidReview(incoming())
+        && incoming().order_id == reviewId
+        && incoming().student_id == request.auth.uid
+        && incoming().is_visible == true
+        && (!('provider_response' in incoming()) || incoming().provider_response == null)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && get(/databases/$(database)/documents/orders/$(reviewId)).data.student_id == request.auth.uid
+        && get(/databases/$(database)/documents/orders/$(reviewId)).data.provider_id == incoming().provider_id
+        && get(/databases/$(database)/documents/orders/$(reviewId)).data.status == 'delivered';
+      allow update: if isValidId(reviewId) && isVerifiedAccount() && isValidReview(incoming())
+        && incoming().order_id == existing().order_id
+        && incoming().student_id == existing().student_id
+        && incoming().provider_id == existing().provider_id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin()
+          || (
+            existing().provider_id == request.auth.uid
+            && existing().provider_response == null
+            && incoming().provider_response is string
+            && incoming().diff(existing()).affectedKeys().hasOnly(['provider_response', 'responded_at', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(reviewId) && isAdmin();
+    }
+
+    // ------------------------------------------------------------------
+    // Notifications
+    // ------------------------------------------------------------------
+    match /notifications/{notifId} {
+      allow get: if isValidId(notifId) && isSignedIn() && (
+        existing().user_id == request.auth.uid || isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        existing().user_id == request.auth.uid || isTokenAdmin()
+      );
+      allow create: if isValidId(notifId) && isVerifiedAccount() && isValidNotification(incoming())
+        && incoming().status == 'unread'
+        && incoming().createdAt == request.time
+        && (
+          isAdmin()
+          || (
+            ('order_id' in incoming()) && incoming().order_id != null
+            && existsAfter(/databases/$(database)/documents/orders/$(incoming().order_id))
+            && (
+              getAfter(/databases/$(database)/documents/orders/$(incoming().order_id)).data.student_id == request.auth.uid
+              || getAfter(/databases/$(database)/documents/orders/$(incoming().order_id)).data.provider_id == request.auth.uid
+              || getAfter(/databases/$(database)/documents/orders/$(incoming().order_id)).data.delivery_partner_id == request.auth.uid
+            )
+          )
+        );
+      allow update: if isValidId(notifId) && isVerifiedAccount() && isValidNotification(incoming()) && (
+        isAdmin() || (
+          existing().user_id == request.auth.uid
+          && incoming().user_id == existing().user_id
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'read_at'])
+        )
+      );
+      allow delete: if isValidId(notifId) && isAdmin();
+    }
+
+    // ------------------------------------------------------------------
+    // Complaints
+    // ------------------------------------------------------------------
+    match /complaints/{complaintId} {
+      allow get: if isValidId(complaintId) && isSignedIn() && (
+        existing().complainant_id == request.auth.uid || isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        existing().complainant_id == request.auth.uid || isTokenAdmin()
+      );
+      allow create: if isValidId(complaintId) && isVerifiedAccount() && isValidComplaint(incoming())
+        && incoming().complainant_id == request.auth.uid
+        && incoming().status == 'open'
+        && (!('resolved_by' in incoming()) || incoming().resolved_by == null)
+        && (!('resolution_note' in incoming()) || incoming().resolution_note == null)
+        && (!('resolved_at' in incoming()) || incoming().resolved_at == null)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(complaintId) && isAdmin() && isValidComplaint(incoming())
+        && incoming().complainant_id == existing().complainant_id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(complaintId) && isAdmin();
+    }
+
+    // ------------------------------------------------------------------
+    // Admin-Managed Reference Lookups & Pricing Config
+    // ------------------------------------------------------------------
+    match /universities/{uniId} {
+      allow get, list: if true;
+      allow create, update: if isValidId(uniId) && isAdmin() && isValidLookupItem(incoming());
+      allow delete: if isValidId(uniId) && isAdmin();
+    }
+
+    match /meal_categories/{catId} {
+      allow get, list: if true;
+      allow create, update: if isValidId(catId) && isAdmin() && isValidLookupItem(incoming());
+      allow delete: if isValidId(catId) && isAdmin();
+    }
+
+    match /allergens/{allergenId} {
+      allow get, list: if true;
+      allow create, update: if isValidId(allergenId) && isAdmin() && isValidLookupItem(incoming());
+      allow delete: if isValidId(allergenId) && isAdmin();
+    }
+
+    match /dietary_preferences/{prefId} {
+      allow get, list: if true;
+      allow create, update: if isValidId(prefId) && isAdmin() && isValidLookupItem(incoming());
+      allow delete: if isValidId(prefId) && isAdmin();
+    }
+
+    match /config/{configId} {
+      allow get, list: if true;
+      allow create, update: if isValidId(configId) && isAdmin() && isValidPricingConfig(incoming())
+        && incoming().updatedAt == request.time;
+      allow delete: if isValidId(configId) && isAdmin();
+    }
+
+    // ------------------------------------------------------------------
+    // LOKMA BOX Pre-Launch Market Validation (Admin-only Read; Atomic Create-Once)
+    // ------------------------------------------------------------------
+    match /lokma_box_leads/{leadId} {
+      allow get: if isValidId(leadId) && isAdmin();
+      allow list: if isTokenAdmin();
+      allow create: if isValidId(leadId)
+        && leadId.matches('^lead_[a-f0-9]{24}$')
+        && isValidLokmaBoxLead(incoming())
+        && incoming().createdAt == request.time
+        && incoming().consent_accepted_at == request.time
+        && (!('user_id' in incoming()) || incoming().user_id == null || (isSignedIn() && incoming().user_id == request.auth.uid));
+      allow update, delete: if isValidId(leadId) && isAdmin();
+    }
+
+    match /lokma_box_surveys/{surveyId} {
+      allow get: if isValidId(surveyId) && isAdmin();
+      allow list: if isTokenAdmin();
+      allow create: if isValidId(surveyId)
+        && surveyId.matches('^survey_[a-f0-9]{24}$')
+        && isValidLokmaBoxSurvey(incoming())
+        && incoming().createdAt == request.time
+        && (!('user_id' in incoming()) || incoming().user_id == null || (isSignedIn() && incoming().user_id == request.auth.uid));
+      allow update, delete: if isValidId(surveyId) && isAdmin();
+    }
+  }
+}

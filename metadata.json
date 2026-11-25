@@ -1,0 +1,6 @@
+{
+  "name": "LOKMA | لقمة",
+  "description": "Egyptian FoodTech platform & complete brand identity connecting university students in Fayoum with trustworthy homemade food providers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

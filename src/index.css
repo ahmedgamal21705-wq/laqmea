@@ -1,0 +1,67 @@
+@import "tailwindcss";
+
+:root {
+  --lokma-green: #0B3D2E;
+  --lokma-green-dark: #072B20;
+  --lokma-orange: #F7931E;
+  --lokma-orange-hover: #E08112;
+  --lokma-cream: #FFF7E6;
+  --lokma-cream-soft: #FBF0D9;
+  --lokma-fresh: #A7C957;
+  --lokma-white: #FFFFFF;
+  --lokma-charcoal: #13221C;
+  --lokma-muted: #4E6359;
+  --lokma-border: rgba(11, 61, 46, 0.14);
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--lokma-cream);
+  color: var(--lokma-charcoal);
+  font-family: 'Cairo', system-ui, -apple-system, sans-serif;
+  overflow-x: clip;
+}
+
+[dir="ltr"] body,
+[dir="ltr"] {
+  font-family: 'Cairo', system-ui, -apple-system, sans-serif;
+}
+
+.font-arabic-heading,
+.font-english-heading,
+h1,
+h2,
+h3,
+h4,
+.font-heading {
+  font-family: 'Cairo', system-ui, -apple-system, sans-serif;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.lokma-card {
+  background-color: #FFFFFF;
+  border: 1px solid rgba(11, 61, 46, 0.12);
+  box-shadow: 0 4px 20px rgba(11, 61, 46, 0.05);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
